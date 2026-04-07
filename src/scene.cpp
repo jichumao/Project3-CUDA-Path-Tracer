@@ -2,6 +2,7 @@
 #include <cstring>
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtx/string_cast.hpp>
+#include <algorithm>
 #include <unordered_map>
 #include "json.hpp"
 #include "scene.h"
@@ -10,6 +11,105 @@
 #include "tiny_gltf.h"
 #include "stb_image.h"
 using json = nlohmann::json;
+
+#if BVH_ENABLED
+namespace {
+
+AABB computeTriangleBounds(const Triangle& tri) {
+	AABB bounds;
+	bounds.min = glm::min(glm::min(tri.v0.position, tri.v1.position), tri.v2.position);
+	bounds.max = glm::max(glm::max(tri.v0.position, tri.v1.position), tri.v2.position);
+	return bounds;
+}
+
+AABB mergeBounds(const AABB& a, const AABB& b) {
+	AABB merged;
+	merged.min = glm::min(a.min, b.min);
+	merged.max = glm::max(a.max, b.max);
+	return merged;
+}
+
+glm::vec3 boundsCentroid(const AABB& b) {
+	return 0.5f * (b.min + b.max);
+}
+
+int buildMeshBVHRecursive(
+	std::vector<BVHNode>& nodes,
+	std::vector<int>& triIndices,
+	const std::vector<AABB>& triBounds,
+	int start,
+	int end) {
+	const int nodeIdx = static_cast<int>(nodes.size());
+	nodes.emplace_back();
+	BVHNode& node = nodes.back();
+
+	AABB nodeBounds = triBounds[triIndices[start]];
+	for (int i = start + 1; i < end; ++i) {
+		nodeBounds = mergeBounds(nodeBounds, triBounds[triIndices[i]]);
+	}
+	node.bounds = nodeBounds;
+
+	const int triCount = end - start;
+	if (triCount <= 4) {
+		node.firstTriIndex = start;
+		node.triCount = triCount;
+		return nodeIdx;
+	}
+
+	AABB centroidBounds;
+	const glm::vec3 firstCentroid = boundsCentroid(triBounds[triIndices[start]]);
+	centroidBounds.min = firstCentroid;
+	centroidBounds.max = firstCentroid;
+	for (int i = start + 1; i < end; ++i) {
+		const glm::vec3 c = boundsCentroid(triBounds[triIndices[i]]);
+		centroidBounds.min = glm::min(centroidBounds.min, c);
+		centroidBounds.max = glm::max(centroidBounds.max, c);
+	}
+
+	glm::vec3 diag = centroidBounds.max - centroidBounds.min;
+	int axis = 0;
+	if (diag.y > diag.x && diag.y > diag.z) axis = 1;
+	else if (diag.z > diag.x) axis = 2;
+
+	const int mid = start + triCount / 2;
+	std::nth_element(
+		triIndices.begin() + start,
+		triIndices.begin() + mid,
+		triIndices.begin() + end,
+		[&](int a, int b) {
+			return boundsCentroid(triBounds[a])[axis] < boundsCentroid(triBounds[b])[axis];
+		});
+
+	node.leftChild = buildMeshBVHRecursive(nodes, triIndices, triBounds, start, mid);
+	node.rightChild = buildMeshBVHRecursive(nodes, triIndices, triBounds, mid, end);
+	return nodeIdx;
+}
+
+int buildMeshBVH(
+	std::vector<BVHNode>& nodes,
+	std::vector<int>& triIndices,
+	const std::vector<Triangle>& meshTris,
+	int startTriangleIndex,
+	int endTriangleIndex) {
+	if (endTriangleIndex < startTriangleIndex) {
+		return -1;
+	}
+
+	std::vector<AABB> triBounds(meshTris.size());
+	for (int i = startTriangleIndex; i <= endTriangleIndex; ++i) {
+		triBounds[i] = computeTriangleBounds(meshTris[i]);
+	}
+
+	const int triIndexStart = static_cast<int>(triIndices.size());
+	for (int i = startTriangleIndex; i <= endTriangleIndex; ++i) {
+		triIndices.push_back(i);
+	}
+
+	return buildMeshBVHRecursive(nodes, triIndices, triBounds, triIndexStart, static_cast<int>(triIndices.size()));
+}
+
+}
+#endif
 
 Scene::Scene(string filename)
 {
@@ -358,4 +458,13 @@ void Scene::loadFromGltf(const std::string& gltfName, Geom& meshGeom) {
 
         meshGeom.endTriangleIndex = meshTris.size() - 1;
     }
+
+#if BVH_ENABLED
+	meshGeom.bvhRootNodeIdx = buildMeshBVH(
+		bvhNodes,
+		bvhTriIndices,
+		meshTris,
+		meshGeom.startTriangleIndex,
+		meshGeom.endTriangleIndex);
+#endif
 }

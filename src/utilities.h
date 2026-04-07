@@ -28,7 +28,7 @@
 #define ANTI_ALIASING           1
 #define DEPTH_OF_FIELD          0
 #define GAMMA_CORRECTION        1
-#define BVH_ENABLED             0
+#define BVH_ENABLED             1
 #define ENVIRONMENT_MAP_ENABLED 1
 #define BOUNDING_VOLUME_INTERSECTION_CULLING_ENABLED 0
 // Tone mapping

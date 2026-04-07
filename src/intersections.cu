@@ -108,42 +108,34 @@ __host__ __device__ float sphereIntersectionTest(
     return glm::length(r.origin - intersectionPoint);
 }
 
-bool rayIntersectsAABB(const Ray& ray, const glm::vec3& min, const glm::vec3& max) {
-	// Slabs Method for Ray-AABB intersection
-	float tmin = (min.x - ray.origin.x) / ray.direction.x;
-	float tmax = (max.x - ray.origin.x) / ray.direction.x;
+__host__ __device__ bool rayIntersectsAABB(const Ray& ray, const glm::vec3& min, const glm::vec3& max) {
+	float tmin = -FLT_MAX;
+	float tmax = FLT_MAX;
 
-	if (tmin > tmax) std::swap(tmin, tmax);
-
-	float tymin = (min.y - ray.origin.y) / ray.direction.y;
-	float tymax = (max.y - ray.origin.y) / ray.direction.y;
-
-	if (tymin > tymax) std::swap(tymin, tymax);
-
-	if ((tmin > tymax) || (tymin > tmax))
-		return false;
-
-	if (tymin > tmin)
-		tmin = tymin;
-
-	if (tymax < tmax)
-		tmax = tymax;
-
-	float tzmin = (min.z - ray.origin.z) / ray.direction.z;
-	float tzmax = (max.z - ray.origin.z) / ray.direction.z;
-
-	if (tzmin > tzmax) std::swap(tzmin, tzmax);
-
-	if ((tmin > tzmax) || (tzmin > tmax))
-		return false;
-
-	return true;
+	for (int axis = 0; axis < 3; ++axis) {
+		float invD = 1.0f / ray.direction[axis];
+		float t0 = (min[axis] - ray.origin[axis]) * invD;
+		float t1 = (max[axis] - ray.origin[axis]) * invD;
+		if (invD < 0.0f) {
+			float temp = t0;
+			t0 = t1;
+			t1 = temp;
+		}
+		tmin = glm::max(tmin, t0);
+		tmax = glm::min(tmax, t1);
+		if (tmax < tmin) {
+			return false;
+		}
+	}
+	return tmax > 0.0f;
 }
 
 __host__ __device__ 
 float meshIntersectionTest(
     Geom mesh,
 	Triangle* tris,
+	BVHNode* bvhNodes,
+	int* bvhTriIndices,
     Ray ray,
     glm::vec3& intersectionPoint,
     glm::vec3& normal,
@@ -163,8 +155,28 @@ float meshIntersectionTest(
 	glm::vec2 closestUV(0.0f);
 	bool hit = false;
 
-	for (int i = mesh.startTriangleIndex; i <= mesh.endTriangleIndex; ++i) {
-		const Triangle& tri = tris[i];
+	if (mesh.bvhRootNodeIdx < 0) {
+		return -1.0f;
+	}
+
+	int stack[64];
+	int stackPtr = 0;
+	stack[stackPtr++] = mesh.bvhRootNodeIdx;
+
+	while (stackPtr > 0) {
+		int nodeIdx = stack[--stackPtr];
+		if (nodeIdx < 0) {
+			continue;
+		}
+		const BVHNode& node = bvhNodes[nodeIdx];
+		if (!rayIntersectsAABB(Ray{ objOrigin, objDir }, node.bounds.min, node.bounds.max)) {
+			continue;
+		}
+
+		if (node.triCount > 0) {
+			for (int triLocalIdx = 0; triLocalIdx < node.triCount; ++triLocalIdx) {
+				int i = bvhTriIndices[node.firstTriIndex + triLocalIdx];
+				const Triangle& tri = tris[i];
 		glm::vec3 baryPosition;
 
 		if (glm::intersectRayTriangle(objOrigin, objDir,
@@ -200,6 +212,14 @@ float meshIntersectionTest(
 					closestUV = glm::vec2(0.0f);
                 }
 			}
+				}
+			}
+		}
+		else {
+			if (stackPtr + 2 <= 64) {
+				stack[stackPtr++] = node.leftChild;
+				stack[stackPtr++] = node.rightChild;
+			}
 		}
 	}
 
@@ -213,4 +233,3 @@ float meshIntersectionTest(
 	uvOut = closestUV;
 	return glm::length(ray.origin - intersectionPoint);
 }
-

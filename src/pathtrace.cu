@@ -149,6 +149,8 @@ static ShadeableIntersection* dev_intersections = NULL;
 static Triangle* dev_triangles = NULL;
 static Texture* dev_textures = NULL;
 static glm::vec3* dev_texturesData = NULL;
+static BVHNode* dev_bvhNodes = NULL;
+static int* dev_bvhTriIndices = NULL;
 
 static cudaArray_t dev_skyboxArray = NULL;
 static cudaTextureObject_t dev_skyboxTex = 0;
@@ -190,6 +192,14 @@ void pathtraceInit(Scene* scene)
 
 	cudaMalloc(&dev_texturesData, scene->texturesData.size() * sizeof(glm::vec3));
 	cudaMemcpy(dev_texturesData, scene->texturesData.data(), scene->texturesData.size() * sizeof(glm::vec3), cudaMemcpyHostToDevice);
+
+#if BVH_ENABLED
+	cudaMalloc(&dev_bvhNodes, scene->bvhNodes.size() * sizeof(BVHNode));
+	cudaMemcpy(dev_bvhNodes, scene->bvhNodes.data(), scene->bvhNodes.size() * sizeof(BVHNode), cudaMemcpyHostToDevice);
+
+	cudaMalloc(&dev_bvhTriIndices, scene->bvhTriIndices.size() * sizeof(int));
+	cudaMemcpy(dev_bvhTriIndices, scene->bvhTriIndices.data(), scene->bvhTriIndices.size() * sizeof(int), cudaMemcpyHostToDevice);
+#endif
 
 #if ENVIRONMENT_MAP_ENABLED
 	if (scene->enable_skybox) {
@@ -241,6 +251,10 @@ void pathtraceFree()
 	cudaFree(dev_triangles);
 	cudaFree(dev_textures);
 	cudaFree(dev_texturesData);
+#if BVH_ENABLED
+	cudaFree(dev_bvhNodes);
+	cudaFree(dev_bvhTriIndices);
+#endif
 #if ENVIRONMENT_MAP_ENABLED
 	if (dev_skyboxTex) {
 		cudaDestroyTextureObject(dev_skyboxTex);
@@ -333,6 +347,8 @@ __global__ void computeIntersections(
     Geom* geoms,
     int geoms_size,
 	Triangle* triangles,
+	BVHNode* bvhNodes,
+	int* bvhTriIndices,
     ShadeableIntersection* intersections)
 {
     int path_index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -368,7 +384,7 @@ __global__ void computeIntersections(
 			}
 			else if (geom.type == MESH)
             {   
-				t = meshIntersectionTest(geom, triangles, pathSegment.ray, tmp_intersect, tmp_normal,tmp_uv, outside);
+				t = meshIntersectionTest(geom, triangles, bvhNodes, bvhTriIndices, pathSegment.ray, tmp_intersect, tmp_normal,tmp_uv, outside);
             }
 
             // TODO: add more intersection tests here... triangle? metaball? CSG?
@@ -586,6 +602,8 @@ void pathtrace(uchar4* pbo, int frame, int iter)
 			, dev_geoms
 			, hst_scene->geoms.size()
             , dev_triangles
+            , dev_bvhNodes
+            , dev_bvhTriIndices
 			, dev_intersections
 			);
 		checkCUDAError("trace one bounce");
