@@ -76,6 +76,8 @@ __host__ __device__ float sphereIntersectionTest(
 __host__ __device__ float meshIntersectionTest(
     Geom mesh,
     Triangle* triangles,
+    BVHNode* bvhNodes,
+    int* bvhTriIndices,
     Ray r,
     glm::vec3& intersectionPoint,
     glm::vec3& normal,

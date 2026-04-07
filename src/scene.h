@@ -31,5 +31,7 @@ public:
     Texture* skyboxTexture;
 
 #if BVH_ENABLED
+    std::vector<BVHNode> bvhNodes;
+    std::vector<int> bvhTriIndices;
 #endif
 };
